@@ -1,4 +1,4 @@
-﻿package com.example.passtapp
+package com.example.passtapp
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -14,12 +14,13 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var audioSceneAnalyzer: AudioSceneAnalyzer
+    private var isStreaming = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            startCapture()
+            startStreaming()
         } else {
             binding.resultText.text = getString(R.string.permission_denied)
         }
@@ -33,10 +34,14 @@ class MainActivity : AppCompatActivity() {
         audioSceneAnalyzer = AudioSceneAnalyzer(this)
 
         binding.captureButton.setOnClickListener {
-            if (hasAudioPermission()) {
-                startCapture()
+            if (!isStreaming) {
+                if (hasAudioPermission()) {
+                    startStreaming()
+                } else {
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
             } else {
-                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                stopStreaming()
             }
         }
     }
@@ -48,27 +53,40 @@ class MainActivity : AppCompatActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun startCapture() {
-        binding.captureButton.isEnabled = false
-        binding.statusText.text = getString(R.string.recording)
+    private fun startStreaming() {
+        binding.captureButton.text = getString(R.string.stop_listening)
+        binding.statusText.text = getString(R.string.streaming)
         binding.resultText.text = getString(R.string.listening)
-
-        lifecycleScope.launch {
-            try {
-                val result = audioSceneAnalyzer.captureAndClassify()
+        audioSceneAnalyzer.startStreaming(
+            scope = lifecycleScope,
+            onResult = { result ->
                 binding.statusText.text = getString(R.string.detected)
                 binding.resultText.text = result.formatForDisplay()
-            } catch (ex: Exception) {
-                binding.statusText.text = getString(R.string.failed)
-                binding.resultText.text = ex.localizedMessage ?: ex.toString()
-            } finally {
-                binding.captureButton.isEnabled = true
+            },
+            onStatus = { status ->
+                binding.statusText.text = status
+            },
+            onError = { message ->
+                binding.resultText.text = message
             }
+        )
+        isStreaming = true
+    }
+
+    private fun stopStreaming() {
+        binding.captureButton.text = getString(R.string.start_listening)
+        lifecycleScope.launch {
+            audioSceneAnalyzer.stopStreaming()
+            binding.statusText.text = getString(R.string.stopped)
         }
+        isStreaming = false
     }
 
     override fun onDestroy() {
+        lifecycleScope.launch {
+            audioSceneAnalyzer.stopStreaming()
+            audioSceneAnalyzer.release()
+        }
         super.onDestroy()
-        audioSceneAnalyzer.release()
     }
 }
