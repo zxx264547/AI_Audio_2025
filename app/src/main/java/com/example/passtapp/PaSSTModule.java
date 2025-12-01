@@ -59,8 +59,8 @@ public class PaSSTModule {
         }
         indices.sort((a, b) -> Float.compare(confidences[b], confidences[a]));
 
-        List<Prediction> results = new ArrayList<>(3);
-        int limit = Math.min(3, indices.size());
+        List<Prediction> results = new ArrayList<>(5);
+        int limit = Math.min(5, indices.size());
         for (int i = 0; i < limit; i++) {
             int idx = indices.get(i);
             String label = idx < localLabels.size() ? localLabels.get(idx) : "unknown#" + idx;
@@ -206,7 +206,7 @@ class SceneResult {
 
     public String formatForDisplay() {
         if (predictions == null || predictions.isEmpty()) {
-            return "No predictions yet";
+            return "暂无预测结果";
         }
         StringBuilder builder = new StringBuilder();
         for (int i = 0; i < predictions.size(); i++) {

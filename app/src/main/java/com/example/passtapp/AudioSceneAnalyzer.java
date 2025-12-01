@@ -8,6 +8,8 @@ import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AudioSceneAnalyzer {
@@ -24,6 +26,14 @@ public class AudioSceneAnalyzer {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean inferring = new AtomicBoolean(false);
+    private final ExecutorService inferenceExecutor =
+            Executors.newSingleThreadExecutor(
+                    r -> {
+                        Thread t = new Thread(r, "AudioInference");
+                        t.setDaemon(true);
+                        return t;
+                    });
     private Thread streamingThread;
 
     public AudioSceneAnalyzer(Context context) {
@@ -69,14 +79,17 @@ public class AudioSceneAnalyzer {
     }
 
     public synchronized void startStreaming(
-            ResultCallback onResult, StatusCallback onStatus, ErrorCallback onError) {
+            ResultCallback onResult,
+            StatusCallback onStatus,
+            ErrorCallback onError,
+            InferenceTimeCallback onInferenceTime) {
         if (running.get()) {
             return;
         }
         running.set(true);
         streamingThread =
                 new Thread(
-                        () -> runStreamingLoop(onResult, onStatus, onError),
+                        () -> runStreamingLoop(onResult, onStatus, onError, onInferenceTime),
                         "AudioSceneStreaming");
         streamingThread.start();
     }
@@ -112,10 +125,14 @@ public class AudioSceneAnalyzer {
     public void release() {
         stopStreaming();
         passtModule.release();
+        inferenceExecutor.shutdownNow();
     }
 
     private void runStreamingLoop(
-            ResultCallback onResult, StatusCallback onStatus, ErrorCallback onError) {
+            ResultCallback onResult,
+            StatusCallback onStatus,
+            ErrorCallback onError,
+            InferenceTimeCallback onInferenceTime) {
         float[] ringBuffer = new float[expectedSamples];
         short[] pcmChunk = new short[CHUNK_SIZE];
         int writePos = 0;
@@ -124,12 +141,12 @@ public class AudioSceneAnalyzer {
         AudioRecord recorder = buildRecorder();
         try {
             recorder.startRecording();
-            postStatus(onStatus, "Listening...");
+            postStatus(onStatus, "正在收音...");
             while (running.get() && !Thread.currentThread().isInterrupted()) {
                 int read =
                         recorder.read(pcmChunk, 0, pcmChunk.length, AudioRecord.READ_BLOCKING);
                 if (read < 0) {
-                    postError(onError, "Recording failed: " + read);
+                    postError(onError, "录音失败: " + read);
                     continue;
                 }
                 if (read == 0) {
@@ -156,10 +173,9 @@ public class AudioSceneAnalyzer {
                     }
                     float avg = sumAbs / snapshot.length;
                     if (avg < MIN_AVG_AMPLITUDE) {
-                        postError(onError, "Audio too quiet, no valid signal detected.");
+                        postError(onError, "音量过小，未检测到有效信号。");
                     } else {
-                        SceneResult result = passtModule.classify(snapshot, snapshot.length);
-                        postResult(onResult, result);
+                        dispatchInference(snapshot, onResult, onStatus, onError, onInferenceTime);
                     }
                 }
             }
@@ -176,8 +192,40 @@ public class AudioSceneAnalyzer {
                 // ignore stop failure
             }
             recorder.release();
-            postStatus(onStatus, "Stopped");
+            postStatus(onStatus, "已停止");
         }
+    }
+
+    private void dispatchInference(
+            float[] snapshot,
+            ResultCallback onResult,
+            StatusCallback onStatus,
+            ErrorCallback onError,
+            InferenceTimeCallback onInferenceTime) {
+        // If a previous inference is running, skip this round to keep capture responsive.
+        if (!inferring.compareAndSet(false, true)) {
+            return;
+        }
+        postStatus(onStatus, "开始推理...");
+        inferenceExecutor.execute(
+                () -> {
+                    long inferStart = SystemClock.elapsedRealtime();
+                    try {
+                        SceneResult result = passtModule.classify(snapshot, snapshot.length);
+                        long duration = SystemClock.elapsedRealtime() - inferStart;
+                        postResult(onResult, result);
+                        postInferenceTime(onInferenceTime, duration);
+                        postStatus(onStatus, "推理结束，用时 " + duration + " ms");
+                    } catch (Exception ex) {
+                        postError(
+                                onError,
+                                ex.getLocalizedMessage() != null
+                                        ? ex.getLocalizedMessage()
+                                        : ex.toString());
+                    } finally {
+                        inferring.set(false);
+                    }
+                });
     }
 
     private void postResult(ResultCallback callback, SceneResult result) {
@@ -201,6 +249,13 @@ public class AudioSceneAnalyzer {
         mainHandler.post(() -> callback.onError(message));
     }
 
+    private void postInferenceTime(InferenceTimeCallback callback, long durationMs) {
+        if (callback == null) {
+            return;
+        }
+        mainHandler.post(() -> callback.onInferenceTime(durationMs));
+    }
+
     public interface ResultCallback {
         void onResult(SceneResult result);
     }
@@ -211,5 +266,9 @@ public class AudioSceneAnalyzer {
 
     public interface ErrorCallback {
         void onError(String message);
+    }
+
+    public interface InferenceTimeCallback {
+        void onInferenceTime(long durationMs);
     }
 }

@@ -57,13 +57,17 @@ public class MainActivity extends AppCompatActivity {
         binding.captureButton.setText(getString(R.string.stop_listening));
         binding.statusText.setText(getString(R.string.streaming));
         binding.resultText.setText(getString(R.string.listening));
+        binding.inferenceTimeText.setText(getString(R.string.inference_time_placeholder));
         audioSceneAnalyzer.startStreaming(
                 result -> {
                     binding.statusText.setText(getString(R.string.detected));
                     binding.resultText.setText(result.formatForDisplay());
                 },
                 status -> binding.statusText.setText(status),
-                message -> binding.resultText.setText(message));
+                message -> binding.resultText.setText(message),
+                timeMs ->
+                        binding.inferenceTimeText.setText(
+                                getString(R.string.inference_time_ms, timeMs)));
         isStreaming = true;
     }
 

@@ -2,11 +2,13 @@
     <string name="app_name">PaSST 场景识别</string>
     <string name="start_listening">开始实时识别</string>
     <string name="stop_listening">停止实时识别</string>
-    <string name="recording">准备采集…</string>
-    <string name="listening">采集中，请保持当前声场</string>
-    <string name="streaming">实时识别中…</string>
-    <string name="detected">识别完成</string>
-    <string name="stopped">已停止监听</string>
+    <string name="recording">准备采集中</string>
+    <string name="listening">采集中，请保持当前环境</string>
+    <string name="streaming">实时识别中...</string>
+    <string name="detected">已检测到</string>
+    <string name="stopped">已停止录制</string>
     <string name="failed">识别失败</string>
-    <string name="permission_denied">需要麦克风权限才能识别声音</string>
+    <string name="permission_denied">需要录音权限才能开始识别</string>
+    <string name="inference_time_placeholder">推理耗时：--</string>
+    <string name="inference_time_ms">推理耗时：%1$d ms</string>
 </resources>
