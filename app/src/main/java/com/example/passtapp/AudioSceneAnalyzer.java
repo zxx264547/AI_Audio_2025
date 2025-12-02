@@ -3,13 +3,13 @@ package com.example.passtapp;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.media.AudioManager;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,7 +19,6 @@ public class AudioSceneAnalyzer {
     private static final int SAMPLE_RATE = 32_000;
     private static final int CLIP_SECONDS = 10;
     private static final int CHUNK_SIZE = 2048;
-    private static final long INFERENCE_INTERVAL_MS = 2000L;
     private static final float MIN_AVG_AMPLITUDE = 1e-4f;
 
     private final PaSSTModule passtModule;
@@ -140,11 +139,11 @@ public class AudioSceneAnalyzer {
         short[] pcmChunk = new short[CHUNK_SIZE];
         int writePos = 0;
         boolean filled = false;
-        long lastInference = 0L;
         AudioRecord recorder = buildRecorder();
         try {
             recorder.startRecording();
             postStatus(onStatus, "正在收音...");
+            postStatus(onStatus, "推理后端: " + passtModule.getBackendName());
             while (running.get() && !Thread.currentThread().isInterrupted()) {
                 int read =
                         recorder.read(pcmChunk, 0, pcmChunk.length, AudioRecord.READ_BLOCKING);
@@ -162,9 +161,8 @@ public class AudioSceneAnalyzer {
                         filled = true;
                     }
                 }
-                long now = SystemClock.elapsedRealtime();
-                if (filled && now - lastInference >= INFERENCE_INTERVAL_MS) {
-                    lastInference = now;
+                // Start inference immediately when previous one完成
+                if (filled && !inferring.get()) {
                     float[] snapshot = new float[ringBuffer.length];
                     int idx = writePos;
                     float sumAbs = 0f;

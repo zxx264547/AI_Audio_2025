@@ -24,6 +24,7 @@ public class PaSSTModule {
     private final int expectedSamples;
     private Module module;
     private List<String> labels;
+    private String backend = "CPU";
 
     public PaSSTModule(Context context, int sampleRate) {
         this.context = context.getApplicationContext();
@@ -76,6 +77,11 @@ public class PaSSTModule {
         return module;
     }
 
+    public String getBackendName() {
+        getModule(); // ensure initialized
+        return backend;
+    }
+
     private synchronized List<String> getLabels() {
         if (labels == null) {
             labels = loadLabels();
@@ -86,6 +92,7 @@ public class PaSSTModule {
     private Module loadModuleSafely(String fileName) {
         String filePath = copyAsset(fileName);
         try {
+            backend = "CPU";
             return Module.load(filePath);
         } catch (Exception ex) {
             throw new IllegalStateException(
