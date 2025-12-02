@@ -3,21 +3,30 @@ package com.example.passtapp;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
-import android.widget.Toast;
+import android.graphics.Typeface;
+import android.text.SpannableStringBuilder;
+import android.text.style.AbsoluteSizeSpan;
+import android.text.style.StyleSpan;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import java.util.List;
+import java.util.Locale;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.app.AlertDialog;
+import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.core.content.ContextCompat;
 import com.example.passtapp.databinding.ActivityMainBinding;
+import com.google.android.material.snackbar.Snackbar;
 
 public class MainActivity extends AppCompatActivity {
 
     private ActivityMainBinding binding;
     private AudioSceneAnalyzer audioSceneAnalyzer;
     private boolean isStreaming = false;
-    private AlertDialog noiseDialog;
-    private boolean noiseModeEnabled = false;
+    private String lastScene = null;
 
     private final ActivityResultLauncher<String> permissionLauncher =
             registerForActivityResult(
@@ -58,8 +67,7 @@ public class MainActivity extends AppCompatActivity {
                         binding.statusText.setText(getString(R.string.playing_buffer));
                     } else {
                         binding.statusText.setText(getString(R.string.no_buffer_available));
-                        Toast.makeText(this, R.string.no_buffer_available, Toast.LENGTH_SHORT)
-                                .show();
+                        showCenteredSnackbar(getString(R.string.no_buffer_available));
                     }
                 });
     }
@@ -77,8 +85,8 @@ public class MainActivity extends AppCompatActivity {
         audioSceneAnalyzer.startStreaming(
                 result -> {
                     binding.statusText.setText(getString(R.string.detected));
-                    binding.resultText.setText(result.formatForDisplay());
-                    maybeShowNoiseDialog(result);
+                    renderResult(result);
+                    maybeShowSceneDialog(result);
                 },
                 status -> binding.statusText.setText(status),
                 message -> binding.resultText.setText(message),
@@ -102,41 +110,82 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
     }
 
-    private void maybeShowNoiseDialog(SceneResult result) {
-        if (result == null || result.getPredictions() == null) {
+    private void maybeShowSceneDialog(SceneResult result) {
+        if (result == null || result.getScene() == null) {
             return;
         }
-        boolean speechDetected =
-                result.getPredictions().stream()
-                        .map(Prediction::getLabel)
-                        .filter(label -> label != null)
-                        .map(String::toLowerCase)
-                        .anyMatch(
-                                label ->
-                                        label.contains("speech")
-                                                || label.contains("speaking")
-                                                || label.contains("talk")
-                                                || label.contains("voice")
-                                                || label.contains("lecture")
-                                                || label.contains("presentation")
-                                                || label.contains("说话")
-                                                || label.contains("讲话")
-                                                || label.contains("演讲")
-                                                || label.contains("人声")
-                                                || label.contains("语音"));
-        if (speechDetected == noiseModeEnabled) {
+        String sceneName = result.getScene().getScene();
+        if (sceneName == null || sceneName.isEmpty()) {
             return;
         }
-        noiseModeEnabled = speechDetected;
-        if (speechDetected) {
-            noiseDialog =
-                    new AlertDialog.Builder(this)
-                            .setTitle(R.string.noise_reduction_title)
-                            .setMessage(R.string.noise_reduction_message)
-                            .setPositiveButton(R.string.ok, null)
-                            .show();
-        } else if (noiseDialog != null && noiseDialog.isShowing()) {
-            noiseDialog.dismiss();
+        if (sceneName.equals(lastScene)) {
+            return;
         }
+        lastScene = sceneName;
+        String message = getString(R.string.scene_switch_message, sceneName);
+        showCenteredSnackbar(message);
+    }
+
+    private void renderResult(SceneResult result) {
+        if (result == null) {
+            binding.resultText.setText("");
+            return;
+        }
+        binding.resultText.setGravity(Gravity.START);
+        String sceneName =
+                result.getScene() != null && result.getScene().getScene() != null
+                        ? result.getScene().getScene()
+                        : getString(R.string.unknown_scene);
+        StringBuilder sb = new StringBuilder();
+        sb.append("模式: ").append(sceneName);
+
+        List<Prediction> preds = result.getPredictions();
+        if (preds != null && !preds.isEmpty()) {
+            sb.append("\n识别结果:\n");
+            for (int i = 0; i < preds.size(); i++) {
+                Prediction p = preds.get(i);
+                sb.append(i + 1)
+                        .append(". ")
+                        .append(p.getLabel())
+                        .append(" (")
+                        .append(String.format(Locale.getDefault(), "%.2f", p.getConfidence()))
+                        .append(')')
+                        .append('\n');
+            }
+            // remove last newline
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+                sb.deleteCharAt(sb.length() - 1);
+            }
+        }
+
+        SpannableStringBuilder builder = new SpannableStringBuilder(sb.toString());
+        int endOfFirstLine = sb.indexOf("\n");
+        int spanEnd = endOfFirstLine >= 0 ? endOfFirstLine : sb.length();
+        builder.setSpan(new StyleSpan(Typeface.BOLD), 0, spanEnd, 0);
+        builder.setSpan(new AbsoluteSizeSpan(26, true), 0, spanEnd, 0);
+        if (endOfFirstLine >= 0) {
+            builder.setSpan(new AbsoluteSizeSpan(14, true), endOfFirstLine, sb.length(), 0);
+        }
+        binding.resultText.setText(builder);
+    }
+
+    private void showCenteredSnackbar(String message) {
+        Snackbar snackbar = Snackbar.make(binding.getRoot(), message, Snackbar.LENGTH_SHORT);
+        View sbView = snackbar.getView();
+        ViewGroup.LayoutParams params = sbView.getLayoutParams();
+        if (params instanceof FrameLayout.LayoutParams) {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) params;
+            lp.gravity = Gravity.CENTER;
+            lp.width = FrameLayout.LayoutParams.WRAP_CONTENT;
+            sbView.setLayoutParams(lp);
+        } else if (params instanceof CoordinatorLayout.LayoutParams) {
+            CoordinatorLayout.LayoutParams lp = (CoordinatorLayout.LayoutParams) params;
+            lp.gravity = Gravity.CENTER;
+            lp.width = CoordinatorLayout.LayoutParams.WRAP_CONTENT;
+            sbView.setLayoutParams(lp);
+        }
+        int padding = (int) (16 * getResources().getDisplayMetrics().density);
+        sbView.setPadding(padding * 2, padding, padding * 2, padding);
+        snackbar.show();
     }
 }

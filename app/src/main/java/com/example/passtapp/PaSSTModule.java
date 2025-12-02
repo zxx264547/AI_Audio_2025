@@ -19,6 +19,17 @@ public class PaSSTModule {
     private static final String MODEL_FILE = "passt_model.pt";
     private static final Pattern CSV_SPLIT_REGEX =
             Pattern.compile(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+    // AudioSet indices for scene classification
+    private static final int IDX_SPEECH = 0;
+    private static final int IDX_WIND = 285;
+    private static final int[] IDXS_INDOOR = {506, 507, 508};
+    private static final int[] IDXS_OUTDOOR = {509, 510};
+
+    // Thresholds
+    private static final float TH_SPEECH = 0.50f;
+    private static final float TH_WIND = 0.25f;
+    private static final float TH_INDOOR = 0.04f;
+    private static final float TH_OUTDOOR = 0.04f;
 
     private final Context context;
     private final int expectedSamples;
@@ -42,30 +53,39 @@ public class PaSSTModule {
 
         Tensor inputTensor = Tensor.fromBlob(waveform, new long[] {1, waveform.length});
         float[] logits = localModule.forward(IValue.from(inputTensor)).toTensor().getDataAsFloatArray();
-        List<Prediction> predictions = buildPredictions(logits, localLabels);
-        return new SceneResult(predictions);
+        float[] probs = buildProbabilities(logits);
+        SceneClassification scene = classifyScene(probs);
+        List<Prediction> predictions = buildPredictions(probs, localLabels);
+        return new SceneResult(predictions, scene);
     }
 
-    private List<Prediction> buildPredictions(float[] logits, List<String> localLabels) {
-        if (logits == null || logits.length == 0) {
+    private float[] buildProbabilities(float[] logits) {
+        if (logits == null) {
+            return new float[0];
+        }
+        float[] probs = new float[logits.length];
+        for (int i = 0; i < logits.length; i++) {
+            probs[i] = sigmoid(logits[i]);
+        }
+        return probs;
+    }
+
+    private List<Prediction> buildPredictions(float[] probs, List<String> localLabels) {
+        if (probs == null || probs.length == 0) {
             return Collections.emptyList();
         }
-        float[] confidences = new float[logits.length];
-        for (int i = 0; i < logits.length; i++) {
-            confidences[i] = sigmoid(logits[i]);
-        }
-        List<Integer> indices = new ArrayList<>(logits.length);
-        for (int i = 0; i < logits.length; i++) {
+        List<Integer> indices = new ArrayList<>(probs.length);
+        for (int i = 0; i < probs.length; i++) {
             indices.add(i);
         }
-        indices.sort((a, b) -> Float.compare(confidences[b], confidences[a]));
+        indices.sort((a, b) -> Float.compare(probs[b], probs[a]));
 
         List<Prediction> results = new ArrayList<>(5);
         int limit = Math.min(5, indices.size());
         for (int i = 0; i < limit; i++) {
             int idx = indices.get(i);
             String label = idx < localLabels.size() ? localLabels.get(idx) : "unknown#" + idx;
-            results.add(new Prediction(label, confidences[idx]));
+            results.add(new Prediction(label, probs[idx]));
         }
         return results;
     }
@@ -77,16 +97,16 @@ public class PaSSTModule {
         return module;
     }
 
-    public String getBackendName() {
-        getModule(); // ensure initialized
-        return backend;
-    }
-
     private synchronized List<String> getLabels() {
         if (labels == null) {
             labels = loadLabels();
         }
         return labels;
+    }
+
+    public String getBackendName() {
+        getModule(); // ensure initialized
+        return backend;
     }
 
     private Module loadModuleSafely(String fileName) {
@@ -180,6 +200,57 @@ public class PaSSTModule {
         float expValue = (float) Math.exp(value);
         return expValue / (1f + expValue);
     }
+
+    private SceneClassification classifyScene(float[] probs) {
+        if (probs == null || probs.length <= IDX_WIND) {
+            return new SceneClassification("未知", "概率维度不足");
+        }
+        float pSpeech = probs[IDX_SPEECH];
+        float pWind = probs[IDX_WIND];
+        float pIndoorMax = maxAt(probs, IDXS_INDOOR);
+        float pOutdoorMax = maxAt(probs, IDXS_OUTDOOR);
+
+        boolean hasSpeech = pSpeech >= TH_SPEECH;
+        boolean hasIndoor = pIndoorMax >= TH_INDOOR;
+        boolean hasWind = pWind >= TH_WIND;
+        boolean hasOutdoor = pOutdoorMax >= TH_OUTDOOR;
+
+        String scene;
+        if (hasSpeech && hasIndoor) {
+            scene = "会议模式";
+        } else if (hasWind && hasOutdoor) {
+            scene = "户外降噪";
+        } else {
+            scene = "标准降噪";
+        }
+
+        String debug =
+                "scene="
+                        + scene
+                        + " | speech="
+                        + fmt(pSpeech, hasSpeech, TH_SPEECH)
+                        + " | indoorMax="
+                        + fmt(pIndoorMax, hasIndoor, TH_INDOOR)
+                        + " | wind="
+                        + fmt(pWind, hasWind, TH_WIND)
+                        + " | outdoorMax="
+                        + fmt(pOutdoorMax, hasOutdoor, TH_OUTDOOR);
+        return new SceneClassification(scene, debug);
+    }
+
+    private static float maxAt(float[] probs, int[] indices) {
+        float max = 0f;
+        for (int idx : indices) {
+            if (idx >= 0 && idx < probs.length) {
+                max = Math.max(max, probs[idx]);
+            }
+        }
+        return max;
+    }
+
+    private static String fmt(float value, boolean hit, float th) {
+        return String.format(Locale.getDefault(), "%.3f/%s(th=%.2f)", value, hit ? "√" : "×", th);
+    }
 }
 
 class Prediction {
@@ -202,13 +273,19 @@ class Prediction {
 
 class SceneResult {
     private final List<Prediction> predictions;
+    private final SceneClassification scene;
 
-    SceneResult(List<Prediction> predictions) {
+    SceneResult(List<Prediction> predictions, SceneClassification scene) {
         this.predictions = predictions;
+        this.scene = scene;
     }
 
     public List<Prediction> getPredictions() {
         return predictions;
+    }
+
+    public SceneClassification getScene() {
+        return scene;
     }
 
     public String formatForDisplay() {
@@ -216,6 +293,9 @@ class SceneResult {
             return "暂无预测结果";
         }
         StringBuilder builder = new StringBuilder();
+        if (scene != null) {
+            builder.append("模式: ").append(scene.getScene()).append('\n');
+        }
         for (int i = 0; i < predictions.size(); i++) {
             Prediction prediction = predictions.get(i);
             builder.append(i + 1)
@@ -226,5 +306,23 @@ class SceneResult {
                     .append('\n');
         }
         return builder.toString().trim();
+    }
+}
+
+class SceneClassification {
+    private final String scene;
+    private final String debug;
+
+    SceneClassification(String scene, String debug) {
+        this.scene = scene;
+        this.debug = debug;
+    }
+
+    public String getScene() {
+        return scene;
+    }
+
+    public String getDebug() {
+        return debug;
     }
 }
