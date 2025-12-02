@@ -27,7 +27,7 @@ public class PaSSTModule {
 
     // Thresholds
     private static final float TH_SPEECH = 0.50f;
-    private static final float TH_WIND = 0.25f;
+    private static final float TH_WIND = 0.15f;
     private static final float TH_INDOOR = 0.04f;
     private static final float TH_OUTDOOR = 0.04f;
 
@@ -225,16 +225,16 @@ public class PaSSTModule {
         }
 
         String debug =
-                "scene="
+                "场景="
                         + scene
-                        + " | speech="
-                        + fmt(pSpeech, hasSpeech, TH_SPEECH)
-                        + " | indoorMax="
-                        + fmt(pIndoorMax, hasIndoor, TH_INDOOR)
-                        + " | wind="
-                        + fmt(pWind, hasWind, TH_WIND)
-                        + " | outdoorMax="
-                        + fmt(pOutdoorMax, hasOutdoor, TH_OUTDOOR);
+                        + " | 语音="
+                        + fmtCn(pSpeech, hasSpeech, TH_SPEECH)
+                        + " | 室内最大="
+                        + fmtCn(pIndoorMax, hasIndoor, TH_INDOOR)
+                        + " | 风噪="
+                        + fmtCn(pWind, hasWind, TH_WIND)
+                        + " | 户外最大="
+                        + fmtCn(pOutdoorMax, hasOutdoor, TH_OUTDOOR);
         return new SceneClassification(scene, debug);
     }
 
@@ -248,8 +248,13 @@ public class PaSSTModule {
         return max;
     }
 
-    private static String fmt(float value, boolean hit, float th) {
-        return String.format(Locale.getDefault(), "%.3f/%s(th=%.2f)", value, hit ? "√" : "×", th);
+    private static String fmtCn(float value, boolean hit, float th) {
+        return String.format(
+                Locale.getDefault(),
+                "%.3f/%s(阈值=%.2f)",
+                value,
+                hit ? "命中" : "未达",
+                th);
     }
 }
 

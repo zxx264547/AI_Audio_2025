@@ -10,9 +10,14 @@ import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.Environment;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 
 public class AudioSceneAnalyzer {
 
@@ -24,6 +29,7 @@ public class AudioSceneAnalyzer {
     private final PaSSTModule passtModule;
     private final int expectedSamples;
     private final float normalizer;
+    private final Context appContext;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -37,9 +43,12 @@ public class AudioSceneAnalyzer {
                     });
     private Thread streamingThread;
     private volatile float[] lastSnapshot;
+    private volatile float[] lastRawSnapshot;
+    private volatile NoiseMode currentNoiseMode = NoiseMode.STANDARD;
 
     public AudioSceneAnalyzer(Context context) {
-        this.passtModule = new PaSSTModule(context, SAMPLE_RATE);
+        this.appContext = context.getApplicationContext();
+        this.passtModule = new PaSSTModule(this.appContext, SAMPLE_RATE);
         this.expectedSamples = SAMPLE_RATE * CLIP_SECONDS;
         this.normalizer = 1f / Short.MAX_VALUE;
     }
@@ -172,12 +181,14 @@ public class AudioSceneAnalyzer {
                         sumAbs += Math.abs(value);
                         idx = (idx + 1) % snapshot.length;
                     }
-                    lastSnapshot = snapshot;
+                    lastRawSnapshot = snapshot;
+                    float[] processed = applyNoiseReduction(snapshot, currentNoiseMode);
+                    lastSnapshot = processed;
                     float avg = sumAbs / snapshot.length;
                     if (avg < MIN_AVG_AMPLITUDE) {
                         postError(onError, "音量过小，未检测到有效信号。");
                     } else {
-                        dispatchInference(snapshot, onResult, onStatus, onError, onInferenceTime);
+                        dispatchInference(processed, onResult, onStatus, onError, onInferenceTime);
                     }
                 }
             }
@@ -215,6 +226,7 @@ public class AudioSceneAnalyzer {
                     try {
                         SceneResult result = passtModule.classify(snapshot, snapshot.length);
                         long duration = SystemClock.elapsedRealtime() - inferStart;
+                        updateNoiseModeFromScene(result);
                         postResult(onResult, result);
                         postInferenceTime(onInferenceTime, duration);
                         postStatus(onStatus, "推理结束，用时 " + duration + " ms");
@@ -228,6 +240,73 @@ public class AudioSceneAnalyzer {
                         inferring.set(false);
                     }
                 });
+    }
+
+    private void updateNoiseModeFromScene(SceneResult result) {
+        if (result == null || result.getScene() == null) {
+            return;
+        }
+        String sceneName = result.getScene().getScene();
+        if (sceneName == null) {
+            return;
+        }
+        String normalized = sceneName.toLowerCase(Locale.getDefault());
+        if (normalized.contains("会议")) {
+            currentNoiseMode = NoiseMode.MEETING;
+        } else if (normalized.contains("户外")) {
+            currentNoiseMode = NoiseMode.OUTDOOR;
+        } else {
+            currentNoiseMode = NoiseMode.STANDARD;
+        }
+    }
+
+    private float[] applyNoiseReduction(float[] input, NoiseMode mode) {
+        if (input == null) {
+            return new float[0];
+        }
+        float[] out = new float[input.length];
+        float gate;
+        int smoothWindow;
+        switch (mode) {
+            case MEETING:
+                gate = 0.003f;
+                smoothWindow = 3;
+                break;
+            case OUTDOOR:
+                gate = 0.008f;
+                smoothWindow = 5;
+                break;
+            case STANDARD:
+            default:
+                gate = 0.0f;
+                smoothWindow = 1;
+        }
+
+        // Noise gate
+        for (int i = 0; i < input.length; i++) {
+            float v = input[i];
+            out[i] = Math.abs(v) < gate ? 0f : v;
+        }
+
+        // Simple moving average smoothing
+        if (smoothWindow > 1) {
+            float[] tmp = new float[out.length];
+            float sum = 0f;
+            int half = smoothWindow / 2;
+            for (int i = 0; i < out.length; i++) {
+                // add current
+                sum += out[i];
+                // remove element leaving window
+                if (i >= smoothWindow) {
+                    sum -= out[i - smoothWindow];
+                }
+                int count = Math.min(i + 1, smoothWindow);
+                tmp[i] = sum / count;
+            }
+            out = tmp;
+        }
+
+        return out;
     }
 
     private void postResult(ResultCallback callback, SceneResult result) {
@@ -258,10 +337,17 @@ public class AudioSceneAnalyzer {
         mainHandler.post(() -> callback.onInferenceTime(durationMs));
     }
 
-    public boolean playCurrentBuffer() {
-        float[] snapshot = lastSnapshot;
+    public PlaybackResult playRawBufferAndExport() {
+        return playBuffer(lastRawSnapshot, "raw");
+    }
+
+    public PlaybackResult playProcessedBufferAndExport() {
+        return playBuffer(lastSnapshot, "denoised");
+    }
+
+    private PlaybackResult playBuffer(float[] snapshot, String tag) {
         if (snapshot == null || snapshot.length == 0) {
-            return false;
+            return PlaybackResult.failed("empty buffer");
         }
         short[] pcm = new short[snapshot.length];
         for (int i = 0; i < snapshot.length; i++) {
@@ -279,6 +365,7 @@ public class AudioSceneAnalyzer {
                         AudioTrack.MODE_STATIC);
         track.write(pcm, 0, pcm.length);
         track.play();
+        String filePath = writeWav(snapshot, tag);
         new Thread(
                         () -> {
                             try {
@@ -295,7 +382,86 @@ public class AudioSceneAnalyzer {
                         },
                         "AudioPlayback")
                 .start();
-        return true;
+        return PlaybackResult.success(filePath);
+    }
+
+    private String writeWav(float[] data, String tag) {
+        if (data == null || data.length == 0) {
+            return null;
+        }
+        File dir =
+                appContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC) != null
+                        ? appContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
+                        : appContext.getFilesDir();
+        String name =
+                String.format(
+                        Locale.getDefault(),
+                        "%s_%d.wav",
+                        tag,
+                        System.currentTimeMillis());
+        File outFile = new File(dir, name);
+        try (FileOutputStream fos = new FileOutputStream(outFile)) {
+            int numSamples = data.length;
+            int byteRate = SAMPLE_RATE * 2;
+            int totalDataLen = numSamples * 2 + 36;
+            // WAV header
+            fos.write(new byte[] {'R', 'I', 'F', 'F'});
+            writeInt(fos, totalDataLen);
+            fos.write(new byte[] {'W', 'A', 'V', 'E'});
+            fos.write(new byte[] {'f', 'm', 't', ' '});
+            writeInt(fos, 16); // PCM header size
+            writeShort(fos, (short) 1); // PCM format
+            writeShort(fos, (short) 1); // mono
+            writeInt(fos, SAMPLE_RATE);
+            writeInt(fos, byteRate);
+            writeShort(fos, (short) 2); // block align
+            writeShort(fos, (short) 16); // bits per sample
+            fos.write(new byte[] {'d', 'a', 't', 'a'});
+            writeInt(fos, numSamples * 2);
+            // data
+            for (float v : data) {
+                float clamped = Math.max(-1f, Math.min(1f, v));
+                short s = (short) (clamped * Short.MAX_VALUE);
+                writeShort(fos, s);
+            }
+            fos.flush();
+            return outFile.getAbsolutePath();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private void writeInt(FileOutputStream fos, int value) throws IOException {
+        fos.write(new byte[] {
+            (byte) (value & 0xff),
+            (byte) ((value >> 8) & 0xff),
+            (byte) ((value >> 16) & 0xff),
+            (byte) ((value >> 24) & 0xff)
+        });
+    }
+
+    private void writeShort(FileOutputStream fos, short value) throws IOException {
+        fos.write(new byte[] {(byte) (value & 0xff), (byte) ((value >> 8) & 0xff)});
+    }
+
+    public static class PlaybackResult {
+        public final boolean success;
+        public final String filePath;
+        public final String error;
+
+        private PlaybackResult(boolean success, String filePath, String error) {
+            this.success = success;
+            this.filePath = filePath;
+            this.error = error;
+        }
+
+        public static PlaybackResult success(String filePath) {
+            return new PlaybackResult(true, filePath, null);
+        }
+
+        public static PlaybackResult failed(String error) {
+            return new PlaybackResult(false, null, error);
+        }
     }
 
     public interface ResultCallback {
@@ -312,5 +478,11 @@ public class AudioSceneAnalyzer {
 
     public interface InferenceTimeCallback {
         void onInferenceTime(long durationMs);
+    }
+
+    private enum NoiseMode {
+        STANDARD,
+        MEETING,
+        OUTDOOR
     }
 }

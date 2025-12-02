@@ -60,15 +60,19 @@ public class MainActivity extends AppCompatActivity {
                     }
                 });
 
-        binding.playBufferButton.setOnClickListener(
+        binding.playRawButton.setOnClickListener(
                 v -> {
-                    boolean ok = audioSceneAnalyzer.playCurrentBuffer();
-                    if (ok) {
-                        binding.statusText.setText(getString(R.string.playing_buffer));
-                    } else {
-                        binding.statusText.setText(getString(R.string.no_buffer_available));
-                        showCenteredSnackbar(getString(R.string.no_buffer_available));
-                    }
+                    pauseStreamingIfNeeded();
+                    AudioSceneAnalyzer.PlaybackResult res = audioSceneAnalyzer.playRawBufferAndExport();
+                    handlePlaybackResult(res, R.string.play_raw_buffer);
+                });
+
+        binding.playProcessedButton.setOnClickListener(
+                v -> {
+                    pauseStreamingIfNeeded();
+                    AudioSceneAnalyzer.PlaybackResult res =
+                            audioSceneAnalyzer.playProcessedBufferAndExport();
+                    handlePlaybackResult(res, R.string.play_processed_buffer);
                 });
     }
 
@@ -103,6 +107,12 @@ public class MainActivity extends AppCompatActivity {
         isStreaming = false;
     }
 
+    private void pauseStreamingIfNeeded() {
+        if (isStreaming) {
+            stopStreaming();
+        }
+    }
+
     @Override
     protected void onDestroy() {
         audioSceneAnalyzer.stopStreaming();
@@ -126,6 +136,20 @@ public class MainActivity extends AppCompatActivity {
         showCenteredSnackbar(message);
     }
 
+    private void handlePlaybackResult(AudioSceneAnalyzer.PlaybackResult res, int successResId) {
+        if (res == null || !res.success) {
+            binding.statusText.setText(getString(R.string.no_buffer_available));
+            showCenteredSnackbar(getString(R.string.no_buffer_available));
+            return;
+        }
+        binding.statusText.setText(getString(successResId));
+        String msg =
+                res.filePath != null
+                        ? getString(successResId) + "，文件已保存：" + res.filePath
+                        : getString(successResId);
+        showCenteredSnackbar(msg);
+    }
+
     private void renderResult(SceneResult result) {
         if (result == null) {
             binding.resultText.setText("");
@@ -138,6 +162,21 @@ public class MainActivity extends AppCompatActivity {
                         : getString(R.string.unknown_scene);
         StringBuilder sb = new StringBuilder();
         sb.append("模式: ").append(sceneName);
+        String debug =
+                result.getScene() != null ? result.getScene().getDebug() : null;
+        if (debug != null && !debug.isEmpty()) {
+            sb.append("\n判定标签:\n");
+            String[] parts = debug.split("\\|");
+            for (String part : parts) {
+                String trimmed = part.trim();
+                if (!trimmed.isEmpty()) {
+                    sb.append(trimmed).append('\n');
+                }
+            }
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+                sb.deleteCharAt(sb.length() - 1);
+            }
+        }
 
         List<Prediction> preds = result.getPredictions();
         if (preds != null && !preds.isEmpty()) {
