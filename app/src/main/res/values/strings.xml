@@ -11,4 +11,10 @@
     <string name="permission_denied">需要录音权限才能开始识别</string>
     <string name="inference_time_placeholder">推理耗时：--</string>
     <string name="inference_time_ms">推理耗时：%1$d ms</string>
+    <string name="noise_reduction_title">提示</string>
+    <string name="noise_reduction_message">已开启降噪模式</string>
+    <string name="ok">确定</string>
+    <string name="play_buffer">播放当前缓冲区</string>
+    <string name="no_buffer_available">暂无可播放的缓冲数据</string>
+    <string name="playing_buffer">正在回放缓冲区</string>
 </resources>

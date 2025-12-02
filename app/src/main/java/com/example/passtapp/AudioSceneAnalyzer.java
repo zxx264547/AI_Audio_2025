@@ -4,10 +4,12 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
 import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.media.AudioManager;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,6 +37,7 @@ public class AudioSceneAnalyzer {
                         return t;
                     });
     private Thread streamingThread;
+    private volatile float[] lastSnapshot;
 
     public AudioSceneAnalyzer(Context context) {
         this.passtModule = new PaSSTModule(context, SAMPLE_RATE);
@@ -171,6 +174,7 @@ public class AudioSceneAnalyzer {
                         sumAbs += Math.abs(value);
                         idx = (idx + 1) % snapshot.length;
                     }
+                    lastSnapshot = snapshot;
                     float avg = sumAbs / snapshot.length;
                     if (avg < MIN_AVG_AMPLITUDE) {
                         postError(onError, "音量过小，未检测到有效信号。");
@@ -254,6 +258,46 @@ public class AudioSceneAnalyzer {
             return;
         }
         mainHandler.post(() -> callback.onInferenceTime(durationMs));
+    }
+
+    public boolean playCurrentBuffer() {
+        float[] snapshot = lastSnapshot;
+        if (snapshot == null || snapshot.length == 0) {
+            return false;
+        }
+        short[] pcm = new short[snapshot.length];
+        for (int i = 0; i < snapshot.length; i++) {
+            float v = Math.max(-1f, Math.min(1f, snapshot[i]));
+            pcm[i] = (short) (v * Short.MAX_VALUE);
+        }
+        int bufferSize = pcm.length * 2;
+        AudioTrack track =
+                new AudioTrack(
+                        AudioManager.STREAM_MUSIC,
+                        SAMPLE_RATE,
+                        AudioFormat.CHANNEL_OUT_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize,
+                        AudioTrack.MODE_STATIC);
+        track.write(pcm, 0, pcm.length);
+        track.play();
+        new Thread(
+                        () -> {
+                            try {
+                                long durationMs = (long) (pcm.length * 1000L / SAMPLE_RATE) + 200;
+                                Thread.sleep(durationMs);
+                            } catch (InterruptedException ignored) {
+                                Thread.currentThread().interrupt();
+                            } finally {
+                                try {
+                                    track.release();
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        },
+                        "AudioPlayback")
+                .start();
+        return true;
     }
 
     public interface ResultCallback {
