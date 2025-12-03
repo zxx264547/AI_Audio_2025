@@ -63,7 +63,7 @@ public class MainActivity extends AppCompatActivity {
         binding.playRawButton.setOnClickListener(
                 v -> {
                     pauseStreamingIfNeeded();
-                    AudioSceneAnalyzer.PlaybackResult res = audioSceneAnalyzer.playRawBufferAndExport();
+                    AudioSceneAnalyzer.PlaybackResult res = audioSceneAnalyzer.playRawBuffer();
                     handlePlaybackResult(res, R.string.play_raw_buffer);
                 });
 
@@ -71,8 +71,15 @@ public class MainActivity extends AppCompatActivity {
                 v -> {
                     pauseStreamingIfNeeded();
                     AudioSceneAnalyzer.PlaybackResult res =
-                            audioSceneAnalyzer.playProcessedBufferAndExport();
+                            audioSceneAnalyzer.playProcessedBuffer();
                     handlePlaybackResult(res, R.string.play_processed_buffer);
+                });
+
+        binding.saveBufferButton.setOnClickListener(
+                v -> {
+                    pauseStreamingIfNeeded();
+                    AudioSceneAnalyzer.SaveResult res = audioSceneAnalyzer.saveCurrentBuffers();
+                    handleSaveResult(res);
                 });
     }
 
@@ -142,11 +149,24 @@ public class MainActivity extends AppCompatActivity {
             showCenteredSnackbar(getString(R.string.no_buffer_available));
             return;
         }
-        binding.statusText.setText(getString(successResId));
+        String message = getString(successResId);
+        binding.statusText.setText(message);
+        showCenteredSnackbar(message);
+    }
+
+    private void handleSaveResult(AudioSceneAnalyzer.SaveResult res) {
+        if (res == null || !res.success) {
+            binding.statusText.setText(getString(R.string.save_buffers_failed));
+            showCenteredSnackbar(getString(R.string.no_buffer_available));
+            return;
+        }
+        binding.statusText.setText(getString(R.string.save_buffers_success));
         String msg =
-                res.filePath != null
-                        ? getString(successResId) + "，文件已保存：" + res.filePath
-                        : getString(successResId);
+                getString(R.string.save_buffers_success)
+                        + "\n降噪前: "
+                        + res.rawPath
+                        + "\n降噪后: "
+                        + res.processedPath;
         showCenteredSnackbar(msg);
     }
 

@@ -37,7 +37,7 @@ Android app that captures 32 kHz PCM16 audio, feeds 10 s clips to a PaSST TorchS
 1) Put `passt_model.pt` and labels into `app/src/main/assets/`.
 2) Build/install. On first run grant microphone permission.
 3) Tap “开始实时识别” to start; app shows mode, top labels, and decision lines; Snackbar on mode switches.
-4) Buttons “播放原始10秒” / “播放降噪后10秒” will pause streaming, play the respective buffer, and export WAV paths for offline comparison.
+4) Buttons “播放降噪前声音” / “播放降噪后声音” pause streaming and play the respective buffer; use the “保存当前音频” button to export paired raw/denoised WAV files with matching names and shown paths.
 
 ## Notes / Troubleshooting
 - If model fails to load, check the asset path and verify with your own PC script.

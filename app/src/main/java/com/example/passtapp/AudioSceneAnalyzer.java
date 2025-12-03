@@ -337,15 +337,30 @@ public class AudioSceneAnalyzer {
         mainHandler.post(() -> callback.onInferenceTime(durationMs));
     }
 
-    public PlaybackResult playRawBufferAndExport() {
-        return playBuffer(lastRawSnapshot, "raw");
+    public PlaybackResult playRawBuffer() {
+        return playBuffer(lastRawSnapshot);
     }
 
-    public PlaybackResult playProcessedBufferAndExport() {
-        return playBuffer(lastSnapshot, "denoised");
+    public PlaybackResult playProcessedBuffer() {
+        return playBuffer(lastSnapshot);
     }
 
-    private PlaybackResult playBuffer(float[] snapshot, String tag) {
+    public SaveResult saveCurrentBuffers() {
+        float[] raw = lastRawSnapshot;
+        float[] processed = lastSnapshot;
+        if (raw == null || raw.length == 0 || processed == null || processed.length == 0) {
+            return SaveResult.failed("empty buffer");
+        }
+        long timestamp = System.currentTimeMillis();
+        String rawPath = writeWav(raw, "raw", timestamp);
+        String processedPath = writeWav(processed, "denoised", timestamp);
+        if (rawPath == null || processedPath == null) {
+            return SaveResult.failed("write failed");
+        }
+        return SaveResult.success(rawPath, processedPath);
+    }
+
+    private PlaybackResult playBuffer(float[] snapshot) {
         if (snapshot == null || snapshot.length == 0) {
             return PlaybackResult.failed("empty buffer");
         }
@@ -365,7 +380,6 @@ public class AudioSceneAnalyzer {
                         AudioTrack.MODE_STATIC);
         track.write(pcm, 0, pcm.length);
         track.play();
-        String filePath = writeWav(snapshot, tag);
         new Thread(
                         () -> {
                             try {
@@ -382,10 +396,10 @@ public class AudioSceneAnalyzer {
                         },
                         "AudioPlayback")
                 .start();
-        return PlaybackResult.success(filePath);
+        return PlaybackResult.success();
     }
 
-    private String writeWav(float[] data, String tag) {
+    private String writeWav(float[] data, String tag, long timestamp) {
         if (data == null || data.length == 0) {
             return null;
         }
@@ -393,12 +407,7 @@ public class AudioSceneAnalyzer {
                 appContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC) != null
                         ? appContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
                         : appContext.getFilesDir();
-        String name =
-                String.format(
-                        Locale.getDefault(),
-                        "%s_%d.wav",
-                        tag,
-                        System.currentTimeMillis());
+        String name = String.format(Locale.getDefault(), "%s_%d.wav", tag, timestamp);
         File outFile = new File(dir, name);
         try (FileOutputStream fos = new FileOutputStream(outFile)) {
             int numSamples = data.length;
@@ -446,21 +455,41 @@ public class AudioSceneAnalyzer {
 
     public static class PlaybackResult {
         public final boolean success;
-        public final String filePath;
         public final String error;
 
-        private PlaybackResult(boolean success, String filePath, String error) {
+        private PlaybackResult(boolean success, String error) {
             this.success = success;
-            this.filePath = filePath;
             this.error = error;
         }
 
-        public static PlaybackResult success(String filePath) {
-            return new PlaybackResult(true, filePath, null);
+        public static PlaybackResult success() {
+            return new PlaybackResult(true, null);
         }
 
         public static PlaybackResult failed(String error) {
-            return new PlaybackResult(false, null, error);
+            return new PlaybackResult(false, error);
+        }
+    }
+
+    public static class SaveResult {
+        public final boolean success;
+        public final String rawPath;
+        public final String processedPath;
+        public final String error;
+
+        private SaveResult(boolean success, String rawPath, String processedPath, String error) {
+            this.success = success;
+            this.rawPath = rawPath;
+            this.processedPath = processedPath;
+            this.error = error;
+        }
+
+        public static SaveResult success(String rawPath, String processedPath) {
+            return new SaveResult(true, rawPath, processedPath, null);
+        }
+
+        public static SaveResult failed(String error) {
+            return new SaveResult(false, null, null, error);
         }
     }
 
