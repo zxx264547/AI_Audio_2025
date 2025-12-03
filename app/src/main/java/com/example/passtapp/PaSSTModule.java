@@ -27,7 +27,7 @@ public class PaSSTModule {
 
     // Thresholds
     private static final float TH_SPEECH = 0.50f;
-    private static final float TH_WIND = 0.15f;
+    private static final float TH_WIND = 0.02f;
     private static final float TH_INDOOR = 0.04f;
     private static final float TH_OUTDOOR = 0.04f;
 
